@@ -1,0 +1,37 @@
+[package]
+name = "ntfy-idmon"
+version = "0.1.0"
+edition = "2021"
+description = "live download monitor utilizing for idm.internet.download.manager.plus via NTFY"
+authors = [
+    "Hadi Cahyadi <cumulus13@gmail.com>",
+]
+license = "MIT"
+repository = "https://github.com/cumulus13/ntfy-idmon-rs"
+documentation = "https://docs.rs/ntfy-idmon-rs"
+homepage = "https://github.com/cumulus13/ntfy-idmon-rs"
+
+[[bin]]
+name = "idmon"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "=1.35.1", features = ["full"] }
+reqwest = { version = "=0.11.27", default-features = false, features = ["stream", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ratatui = "=0.25.0"
+crossterm = "=0.27.0"
+rasciichart = "=0.2.17"
+clap = { version = "4", features = ["derive"] }
+clap-version-flag = "1.0.7"
+chrono = { version = "=0.4.31", features = ["clock"] }
+indexmap = "=2.1.0"
+regex = "1"
+anyhow = "1"
+futures-util = "0.3"
+bytes = "1"
+url = "=2.5.0"
+sha2 = "0.10"
+hex = "0.4"
+unicode-segmentation = "=1.12.0"

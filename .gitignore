@@ -1,0 +1,26 @@
+
+# Ignore Sublime Text project files
+*.sublime-*
+
+*.exe
+
+tmp*
+
+src\tmp*
+
+*.bak
+
+*.orig
+
+download/
+
+downloads/
+
+PLAN.md
+
+ANSWER*.md
+
+*.bak*
+
+# Added entries (1 items)
+.pt/
