@@ -1,6 +1,6 @@
 [package]
 name = "ntfy-idmon"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "live download monitor utilizing for idm.internet.download.manager.plus via NTFY"
 authors = [
@@ -35,3 +35,4 @@ url = "=2.5.0"
 sha2 = "0.10"
 hex = "0.4"
 unicode-segmentation = "=1.12.0"
+gntp = "=0.1.16"
