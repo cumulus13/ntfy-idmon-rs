@@ -155,42 +155,93 @@ fn resolve_config(cli: &Cli) -> AppConfig {
 // GNTP / Growl  (manual implementation — avoids gntp crate's edition2024 chain)
 // GNTP/1.0 is a plain-text TCP protocol; spec: http://www.growlforwindows.com/gfw/help/gntp.aspx
 // ─────────────────────────────────────────────────────────────────────────────
-fn gntp_send(host: &str, port: u16, password: &str, title: &str, message: &str) {
-    // Intentionally ignores errors — fire-and-forget, same as Python version
-    let _ = gntp_send_inner(host, port, password, title, message);
-}
+// fn gntp_send(host: &str, port: u16, password: &str, title: &str, message: &str) {
+//     // Intentionally ignores errors — fire-and-forget, same as Python version
+//     let _ = gntp_send_inner(host, port, password, title, message);
+// }
 
-fn gntp_send_inner(host: &str, port: u16, password: &str, title: &str, message: &str) -> std::io::Result<()> {
+// fn gntp_send_inner(host: &str, port: u16, password: &str, title: &str, message: &str) -> std::io::Result<()> {
+//     let addr = format!("{host}:{port}");
+//     let mut stream = TcpStream::connect_timeout(
+//         &addr.parse().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?,
+//         Duration::from_secs(3),
+//     )?;
+
+//     // ── REGISTER ──────────────────────────────────────────────────────────────
+//     // password handling: GNTP supports MD5/SHA hash; empty password = no auth
+//     let encryption = if password.is_empty() { "NONE" } else { "NONE" }; // keep simple
+//     let register = format!(
+//         "GNTP/1.0 REGISTER {encryption}\r\n\
+//          Application-Name: NTFY-IDM Monitor\r\n\
+//          Notifications-Count: 1\r\n\
+//          \r\n\
+//          Notification-Name: Download Update\r\n\
+//          Notification-Display-Name: Download Update\r\n\
+//          Notification-Enabled: True\r\n\
+//          \r\n"
+//     );
+//     stream.write_all(register.as_bytes())?;
+//     stream.flush()?;
+
+//     // brief pause for server to process register
+//     std::thread::sleep(Duration::from_millis(100));
+
+//     // ── NOTIFY ────────────────────────────────────────────────────────────────
+//     let notify = format!(
+//         "GNTP/1.0 NOTIFY {encryption}\r\n\
+//          Application-Name: NTFY-IDM Monitor\r\n\
+//          Notification-Name: Download Update\r\n\
+//          Notification-Title: {title}\r\n\
+//          Notification-Text: {message}\r\n\
+//          \r\n"
+//     );
+//     stream.write_all(notify.as_bytes())?;
+//     stream.flush()?;
+//     Ok(())
+// }
+
+fn gntp_send_inner(host: &str, port: u16, password: &str, event_type: &str, title: &str, message: &str) -> std::io::Result<()> {
     let addr = format!("{host}:{port}");
     let mut stream = TcpStream::connect_timeout(
         &addr.parse().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?,
         Duration::from_secs(3),
     )?;
 
-    // ── REGISTER ──────────────────────────────────────────────────────────────
-    // password handling: GNTP supports MD5/SHA hash; empty password = no auth
-    let encryption = if password.is_empty() { "NONE" } else { "NONE" }; // keep simple
+    let encryption = if password.is_empty() { "NONE" } else { "NONE" };
+    
+    // Define the full list of event names we will use
     let register = format!(
         "GNTP/1.0 REGISTER {encryption}\r\n\
          Application-Name: NTFY-IDM Monitor\r\n\
-         Notifications-Count: 1\r\n\
+         Notifications-Count: 4\r\n\
          \r\n\
-         Notification-Name: Download Update\r\n\
-         Notification-Display-Name: Download Update\r\n\
+         Notification-Name: Download Started\r\n\
+         Notification-Display-Name: Download Started\r\n\
+         Notification-Enabled: True\r\n\
+         \r\n\
+         Notification-Name: Download Complete\r\n\
+         Notification-Display-Name: Download Complete\r\n\
+         Notification-Enabled: True\r\n\
+         \r\n\
+         Notification-Name: Download Paused\r\n\
+         Notification-Display-Name: Download Paused\r\n\
+         Notification-Enabled: True\r\n\
+         \r\n\
+         Notification-Name: Download Stopped\r\n\
+         Notification-Display-Name: Download Stopped\r\n\
          Notification-Enabled: True\r\n\
          \r\n"
     );
     stream.write_all(register.as_bytes())?;
     stream.flush()?;
 
-    // brief pause for server to process register
     std::thread::sleep(Duration::from_millis(100));
 
-    // ── NOTIFY ────────────────────────────────────────────────────────────────
+    // Dynamic Notification Name mapping based on what event_type is supplied
     let notify = format!(
         "GNTP/1.0 NOTIFY {encryption}\r\n\
          Application-Name: NTFY-IDM Monitor\r\n\
-         Notification-Name: Download Update\r\n\
+         Notification-Name: {event_type}\r\n\
          Notification-Title: {title}\r\n\
          Notification-Text: {message}\r\n\
          \r\n"
@@ -198,6 +249,11 @@ fn gntp_send_inner(host: &str, port: u16, password: &str, title: &str, message: 
     stream.write_all(notify.as_bytes())?;
     stream.flush()?;
     Ok(())
+}
+
+// Adjust proxy wrapper signature
+fn gntp_send(host: &str, port: u16, password: &str, event_type: &str, title: &str, message: &str) {
+    let _ = gntp_send_inner(host, port, password, event_type, title, message);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -344,11 +400,55 @@ impl DownloadMonitor {
         true
     }
 
+    // fn update_download(
+    //     &mut self,
+    //     name: String, percent: String, size: String, speed: String,
+    //     eta: String, total_duration: String, timestamp: String,
+    // ) {
+    //     let was_complete = self.downloads.get(&name).map(|e| e.completed).unwrap_or(false);
+
+    //     let is_complete = percent == "100%";
+    //     let status: &'static str = if is_complete {
+    //         "done"
+    //     } else if let Some(prev) = self.downloads.get(&name) {
+    //         if !was_complete && prev.speed == speed && prev.percent == percent { "stop" } else { "run" }
+    //     } else {
+    //         "run"
+    //     };
+
+    //     let entry = DownloadEntry {
+    //         name: name.clone(), percent, size: size.clone(), speed: speed.clone(),
+    //         eta, total_duration, timestamp, status, completed: is_complete,
+    //     };
+
+    //     self.downloads.shift_remove(&name);
+    //     self.downloads.insert(name.clone(), entry);
+
+    //     // speed telemetry
+    //     let speed_bytes = parse_speed_to_bytes(&speed);
+    //     let dq = self.speed_history.entry(name.clone()).or_insert_with(|| VecDeque::with_capacity(MAX_SAMPLES));
+    //     if dq.len() >= MAX_SAMPLES { dq.pop_front(); }
+    //     dq.push_back(speed_bytes);
+
+    //     // global throughput = sum of latest sample per active download
+    //     let total_active: f64 = self.downloads.values()
+    //         .filter(|e| !e.completed)
+    //         .filter_map(|e| self.speed_history.get(&e.name).and_then(|h| h.back()).copied())
+    //         .sum();
+    //     if self.global_speeds.len() >= MAX_SAMPLES { self.global_speeds.pop_front(); }
+    //     self.global_speeds.push_back(total_active);
+
+    //     self.prune_completed();
+    // }
+
     fn update_download(
         &mut self,
         name: String, percent: String, size: String, speed: String,
         eta: String, total_duration: String, timestamp: String,
-    ) {
+    ) -> Option<(&'static str, String, String)> { // Returns Option<(EventName, Name, Size)>
+        
+        // Extract previous status
+        let prev_status = self.downloads.get(&name).map(|e| e.status);
         let was_complete = self.downloads.get(&name).map(|e| e.completed).unwrap_or(false);
 
         let is_complete = percent == "100%";
@@ -368,13 +468,12 @@ impl DownloadMonitor {
         self.downloads.shift_remove(&name);
         self.downloads.insert(name.clone(), entry);
 
-        // speed telemetry
+        // Speed mapping logs...
         let speed_bytes = parse_speed_to_bytes(&speed);
         let dq = self.speed_history.entry(name.clone()).or_insert_with(|| VecDeque::with_capacity(MAX_SAMPLES));
         if dq.len() >= MAX_SAMPLES { dq.pop_front(); }
         dq.push_back(speed_bytes);
 
-        // global throughput = sum of latest sample per active download
         let total_active: f64 = self.downloads.values()
             .filter(|e| !e.completed)
             .filter_map(|e| self.speed_history.get(&e.name).and_then(|h| h.back()).copied())
@@ -383,6 +482,23 @@ impl DownloadMonitor {
         self.global_speeds.push_back(total_active);
 
         self.prune_completed();
+
+        // Evaluate Status transitions for alert notifications
+        match prev_status {
+            None => {
+                // Brand new registration into the memory log
+                if status == "run" { Some(("Download Started", name, size)) } else { None }
+            }
+            Some(prev) if prev != status => {
+                match status {
+                    "done" => Some(("Download Complete", name, size)),
+                    "stop" => Some(("Download Stopped", name, size)),
+                    "run" if prev == "stop" => Some(("Download Started", name, size)),
+                    _ => None
+                }
+            }
+            _ => None
+        }
     }
 
     fn prune_completed(&mut self) {
@@ -667,35 +783,128 @@ async fn main() -> Result<()> {
     // ── message processor ─────────────────────────────────────────────────────
     let monitor2   = Arc::clone(&monitor);
     let cfg2       = cfg.clone();
-    let mut prev_completed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // let mut prev_completed: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // tokio::spawn(async move {
+    //     while let Some(line) = rx.recv().await {
+    //         if debug { eprintln!("[DEBUG] {line}"); }
+
+    //         let (changed, newly_done) = {
+    //             let mut mon = monitor2.lock().unwrap();
+    //             let changed = mon.parse_raw_data(&line);
+    //             // detect newly completed entries
+    //             let newly: Vec<(String, String)> = if changed {
+    //                 mon.downloads.values()
+    //                     .filter(|e| e.completed && !prev_completed.contains(&e.name))
+    //                     .map(|e| (e.name.clone(), e.size.clone()))
+    //                     .collect()
+    //             } else { vec![] };
+    //             (changed, newly)
+    //         };
+
+    //         if changed {
+    //             for (name, size) in newly_done {
+    //                 prev_completed.insert(name.clone());
+    //                 let gh  = cfg2.growl_host.clone();
+    //                 let gp  = cfg2.growl_port;
+    //                 let gpw = cfg2.growl_password.clone();
+    //                 let title = "📥 Download Complete!".to_string();
+    //                 let msg   = format!("Asset: {name}\nSize: {size}");
+    //                 tokio::task::spawn_blocking(move || gntp_send(&gh, gp, &gpw, &title, &msg));
+    //             }
+    //         }
+    //     }
+    // });
+
+    // ── message processor ─────────────────────────────────────────────────────
+    
+    // ── message processor ─────────────────────────────────────────────────────
 
     tokio::spawn(async move {
         while let Some(line) = rx.recv().await {
             if debug { eprintln!("[DEBUG] {line}"); }
 
-            let (changed, newly_done) = {
+            // Extract the notification item directly if the download monitor changes state
+            let notification = {
                 let mut mon = monitor2.lock().unwrap();
-                let changed = mon.parse_raw_data(&line);
-                // detect newly completed entries
-                let newly: Vec<(String, String)> = if changed {
-                    mon.downloads.values()
-                        .filter(|e| e.completed && !prev_completed.contains(&e.name))
-                        .map(|e| (e.name.clone(), e.size.clone()))
-                        .collect()
-                } else { vec![] };
-                (changed, newly)
+                
+                // We parse structural payload fields
+                let raw = line.trim();
+                if !raw.is_empty() {
+                    if let Ok(mut v) = serde_json::from_str::<Value>(raw) {
+                        loop {
+                            let Some(inner) = v.get("message") else { break };
+                            if let Some(s) = inner.as_str() {
+                                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                                    if parsed.is_object() || parsed.is_array() { v = parsed; continue; }
+                                }
+                                break;
+                            } else if inner.is_object() {
+                                v = inner.clone(); continue;
+                            }
+                            break;
+                        }
+
+                        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                        let mut name = String::new();
+                        let mut percent = String::new();
+                        let mut size = String::new();
+                        let mut speed = String::new();
+                        let mut eta = String::new();
+                        let mut total_duration = String::new();
+
+                        if let Some(title) = v.get("title").and_then(|t| t.as_str()) {
+                            let clean = title.replace("📱", "");
+                            let clean = clean.trim();
+                            if clean.starts_with("idm.internet.") {
+                                let inner_msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
+                                let lines: Vec<&str> = inner_msg.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+                                name = lines.first().copied().unwrap_or("Unknown Asset").to_string();
+                                let metrics: Vec<&str> = lines.get(1).map(|l| l.split('|').collect()).unwrap_or_default();
+                                percent = metrics.first().map(|s| s.trim().to_string()).unwrap_or_else(|| "0%".into());
+                                size = metrics.get(1).map(|s| s.trim().to_string()).unwrap_or_else(|| "Unknown Size".into());
+                                speed = metrics.get(2).map(|s| s.trim().to_string()).unwrap_or_else(|| "0KB/s".into());
+                                let time_raw = metrics.get(3).map(|s| s.trim().to_string()).unwrap_or_else(|| "--/--".into());
+                                if time_raw.contains('/') {
+                                    let mut it = time_raw.splitn(2, '/');
+                                    eta = it.next().unwrap_or("--").trim().to_string();
+                                    total_duration = it.next().unwrap_or("--").trim().to_string();
+                                } else {
+                                    eta = time_raw.trim().to_string();
+                                    total_duration = "--".into();
+                                }
+                            }
+                        }
+
+                        if !name.is_empty() {
+                            // Call our enhanced update handler signature
+                            mon.update_download(name, percent, size, speed, eta, total_duration, timestamp)
+                        } else {
+                            None
+                        }
+                    } else { None }
+                } else { None }
             };
 
-            if changed {
-                for (name, size) in newly_done {
-                    prev_completed.insert(name.clone());
-                    let gh  = cfg2.growl_host.clone();
-                    let gp  = cfg2.growl_port;
-                    let gpw = cfg2.growl_password.clone();
-                    let title = "📥 Download Complete!".to_string();
-                    let msg   = format!("Asset: {name}\nSize: {size}");
-                    tokio::task::spawn_blocking(move || gntp_send(&gh, gp, &gpw, &title, &msg));
-                }
+            // Dispatch dynamic alert via threadpool worker seamlessly
+            if let Some((event_type, name, size)) = notification {
+                let gh  = cfg2.growl_host.clone();
+                let gp  = cfg2.growl_port;
+                let gpw = cfg2.growl_password.clone();
+                
+                let emoticons = match event_type {
+                    "Download Complete" => "📥 Done!",
+                    "Download Started"  => "⚡ Running...",
+                    "Download Stopped"  => "🛑 Paused/Stopped",
+                    _                   => "📡 Notice"
+                };
+
+                let title = format!("{emoticons} {event_type}");
+                let msg   = format!("Asset: {name}\nSize: {size}");
+                
+                tokio::task::spawn_blocking(move || {
+                    gntp_send(&gh, gp, &gpw, event_type, &title, &msg)
+                });
             }
         }
     });
