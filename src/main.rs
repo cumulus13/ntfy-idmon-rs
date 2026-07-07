@@ -267,7 +267,8 @@ fn gntp_send_inner(host: &str, port: u16, password: &str, event_type: &str, titl
     }
 
     // Wrap the string path inside a Resource::Url variant
-    let icon_resource = Resource::Url("idm.png".to_string()); 
+    // let icon_resource = Resource::Url("idm.png".to_string()); 
+    let icon_resource = Resource::from_file("idm.png")?;
     
     // Provision events with our structural icon Resource reference cloned for each state
     let events = vec![
