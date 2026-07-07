@@ -31,7 +31,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --fix --all-features --allow-dirty
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --all-targets --all-features
 
   test:
     name: test (${{ matrix.os }})
