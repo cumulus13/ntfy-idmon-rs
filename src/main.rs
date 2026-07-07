@@ -13,7 +13,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use clap_version_flag::colorful_version;
-use gntp::{GntpClient, NotificationType};
+use gntp::{GntpClient, NotificationType, Resource};
 use chrono::Local;
 use indexmap::IndexMap;
 use regex::Regex;
@@ -266,21 +266,21 @@ fn gntp_send_inner(host: &str, port: u16, password: &str, event_type: &str, titl
         client = client.with_password(password);
     }
 
-    // Resolve your absolute or local target path string cleanly
-    let icon_path = "idm.png"; 
+    // Wrap the string path inside a Resource::Url variant
+    let icon_resource = Resource::Url("idm.png".to_string()); 
     
-    // Provision events with our structural icon reference added
+    // Provision events with our structural icon Resource reference cloned for each state
     let events = vec![
-        NotificationType::new("Download Started").with_display_name("Download Started").with_icon(icon_path),
-        NotificationType::new("Download Complete").with_display_name("Download Complete").with_icon(icon_path),
-        NotificationType::new("Download Paused").with_display_name("Download Paused").with_icon(icon_path),
-        NotificationType::new("Download Stopped").with_display_name("Download Stopped").with_icon(icon_path),
+        NotificationType::new("Download Started").with_display_name("Download Started").with_icon(icon_resource.clone()),
+        NotificationType::new("Download Complete").with_display_name("Download Complete").with_icon(icon_resource.clone()),
+        NotificationType::new("Download Paused").with_display_name("Download Paused").with_icon(icon_resource.clone()),
+        NotificationType::new("Download Stopped").with_display_name("Download Stopped").with_icon(icon_resource.clone()),
     ];
 
     // Register our design details schema definition 
     client.register(events)?;
 
-    // Alternatively, overwrite/attach explicitly during the specific message dispatch:
+    // Dispatch the alert notification
     client.notify(event_type, title, message)?;
     
     Ok(())
