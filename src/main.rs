@@ -945,91 +945,162 @@ async fn main() -> Result<()> {
     //     }
     // });
 
-    // ── message processor ─────────────────────────────────────────────────────
-    let monitor2   = Arc::clone(&monitor);
-    let cfg2       = cfg.clone();
+    // // ── message processor ─────────────────────────────────────────────────────
+    // let monitor2   = Arc::clone(&monitor);
+    // let cfg2       = cfg.clone();
 
+    // tokio::spawn(async move {
+    //     while let Some(line) = rx.recv().await {
+    //         if debug { eprintln!("[DEBUG] {line}"); }
+
+    //         // Extract event notification triggers after evaluation
+    //         let alert_payload = {
+    //             let mut mon = monitor2.lock().unwrap();
+                
+    //             let raw = line.trim();
+    //             if !raw.is_empty() {
+    //                 if let Ok(mut v) = serde_json::from_str::<Value>(raw) {
+    //                     // Unwrap nested payload message layers safely
+    //                     loop {
+    //                         let Some(inner) = v.get("message") else { break };
+    //                         if let Some(s) = inner.as_str() {
+    //                             if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+    //                                 if parsed.is_object() || parsed.is_array() { v = parsed; continue; }
+    //                             }
+    //                             break;
+    //                         } else if inner.is_object() {
+    //                             v = inner.clone(); continue;
+    //                         }
+    //                         break;
+    //                     }
+
+    //                     if let Some(title) = v.get("title").and_then(|t| t.as_str()) {
+    //                         let clean = title.replace("📱", "").trim().to_string();
+    //                         if clean.starts_with("idm.internet.") {
+    //                             let inner_msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
+    //                             let lines: Vec<&str> = inner_msg.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    //                             let name = lines.first().copied().unwrap_or("Unknown Asset").to_string();
+                                
+    //                             // Fetch previous entry status out of the indexmap for comparison
+    //                             let old_status = mon.downloads.get(&name).map(|e| e.status);
+
+    //                             // Perform core tracking telemetry updates
+    //                             mon.parse_raw_data(&line);
+
+    //                             // Read new tracking updates safely
+    //                             if let Some(updated_entry) = mon.downloads.get(&name) {
+    //                                 let new_status = updated_entry.status;
+    //                                 let size = updated_entry.size.clone();
+
+    //                                 // Map status transitions into target notification names
+    //                                 match (old_status, new_status) {
+    //                                     (None, "run") => Some(("Download Started", name, size)),
+    //                                     (Some("stop"), "run") => Some(("Download Started", name, size)),
+    //                                     (Some("run"), "stop") => Some(("Download Stopped", name, size)),
+    //                                     (_, "done") if old_status != Some("done") => Some(("Download Complete", name, size)),
+    //                                     _ => None
+    //                                 }
+    //                             } else { None }
+    //                         } else { None }
+    //                     } else { None }
+    //                 } else { None }
+    //             } else { None }
+    //         };
+
+    //         // Dispatch notification via the crate-backed implementation wrapper
+    //         if let Some((event_name, asset_name, asset_size)) = alert_payload {
+    //             let gh  = cfg2.growl_host.clone();
+    //             let gp  = cfg2.growl_port;
+    //             let gpw = cfg2.growl_password.clone();
+
+    //             let decoration = match event_name {
+    //                 "Download Complete" => "📥 Done!",
+    //                 "Download Started"  => "⚡ Running...",
+    //                 "Download Stopped"  => "🛑 Paused/Stopped",
+    //                 _                   => "📡 Update"
+    //             };
+
+    //             let alert_title = format!("{decoration} {event_name}");
+    //             let alert_msg   = format!("Asset: {asset_name}\nSize: {asset_size}");
+
+    //             tokio::task::spawn_blocking(move || {
+    //                 gntp_send(&gh, gp, &gpw, event_name, &alert_title, &alert_msg);
+    //             });
+    //         }
+    //     }
+    // });
+
+    // ── message processor ─────────────────────────────────────────────────────
+    // pending: name -> (size, Instant when 100% first seen)
+    // notified: names already fired — reset only if file goes active again
+    let pending: Arc<Mutex<std::collections::HashMap<String, (String, std::time::Instant)>>> =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let notified: Arc<Mutex<std::collections::HashSet<String>>> =
+        Arc::new(Mutex::new(std::collections::HashSet::new()));
+
+    // checker task: every second, fire notifications whose silence window elapsed
+    {
+        let pending2  = Arc::clone(&pending);
+        let notified2 = Arc::clone(&notified);
+        let cfg2      = cfg.clone();
+        let monitor2  = Arc::clone(&monitor);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tick.tick().await;
+                let to_fire: Vec<(String, String)> = {
+                    let mut p   = pending2.lock().unwrap();
+                    let mon     = monitor2.lock().unwrap();
+                    let now     = std::time::Instant::now();
+                    // drop any entry that resumed before the window expired
+                    p.retain(|name, _| mon.downloads.get(name).map(|e| e.completed).unwrap_or(false));
+                    // collect entries whose 5-second silence window has passed
+                    let ready: Vec<String> = p.iter()
+                        .filter(|(_, (_, ts))| now.duration_since(*ts).as_secs() >= 10)
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    ready.into_iter()
+                        .filter_map(|n| p.remove(&n).map(|(sz, _)| (n, sz)))
+                        .collect()
+                };
+                for (name, size) in to_fire {
+                    notified2.lock().unwrap().insert(name.clone());
+                    let gh = cfg2.growl_host.clone(); let gp = cfg2.growl_port;
+                    let gpw = cfg2.growl_password.clone();
+                    let title = "📥 Download Complete!".to_string();
+                    let msg = format!("Asset: {name}\nSize: {size}");
+                    tokio::task::spawn_blocking(move || gntp_send(&gh, gp, &gpw, &title, &msg));
+                }
+            }
+        });
+    }
+
+    let monitor2  = Arc::clone(&monitor);
+    let pending2  = Arc::clone(&pending);
+    let notified2 = Arc::clone(&notified);
     tokio::spawn(async move {
         while let Some(line) = rx.recv().await {
             if debug { eprintln!("[DEBUG] {line}"); }
-
-            // Extract event notification triggers after evaluation
-            let alert_payload = {
-                let mut mon = monitor2.lock().unwrap();
-                
-                let raw = line.trim();
-                if !raw.is_empty() {
-                    if let Ok(mut v) = serde_json::from_str::<Value>(raw) {
-                        // Unwrap nested payload message layers safely
-                        loop {
-                            let Some(inner) = v.get("message") else { break };
-                            if let Some(s) = inner.as_str() {
-                                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-                                    if parsed.is_object() || parsed.is_array() { v = parsed; continue; }
-                                }
-                                break;
-                            } else if inner.is_object() {
-                                v = inner.clone(); continue;
-                            }
-                            break;
-                        }
-
-                        if let Some(title) = v.get("title").and_then(|t| t.as_str()) {
-                            let clean = title.replace("📱", "").trim().to_string();
-                            if clean.starts_with("idm.internet.") {
-                                let inner_msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
-                                let lines: Vec<&str> = inner_msg.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-                                let name = lines.first().copied().unwrap_or("Unknown Asset").to_string();
-                                
-                                // Fetch previous entry status out of the indexmap for comparison
-                                let old_status = mon.downloads.get(&name).map(|e| e.status);
-
-                                // Perform core tracking telemetry updates
-                                mon.parse_raw_data(&line);
-
-                                // Read new tracking updates safely
-                                if let Some(updated_entry) = mon.downloads.get(&name) {
-                                    let new_status = updated_entry.status;
-                                    let size = updated_entry.size.clone();
-
-                                    // Map status transitions into target notification names
-                                    match (old_status, new_status) {
-                                        (None, "run") => Some(("Download Started", name, size)),
-                                        (Some("stop"), "run") => Some(("Download Started", name, size)),
-                                        (Some("run"), "stop") => Some(("Download Stopped", name, size)),
-                                        (_, "done") if old_status != Some("done") => Some(("Download Complete", name, size)),
-                                        _ => None
-                                    }
-                                } else { None }
-                            } else { None }
-                        } else { None }
-                    } else { None }
-                } else { None }
-            };
-
-            // Dispatch notification via the crate-backed implementation wrapper
-            if let Some((event_name, asset_name, asset_size)) = alert_payload {
-                let gh  = cfg2.growl_host.clone();
-                let gp  = cfg2.growl_port;
-                let gpw = cfg2.growl_password.clone();
-
-                let decoration = match event_name {
-                    "Download Complete" => "📥 Done!",
-                    "Download Started"  => "⚡ Running...",
-                    "Download Stopped"  => "🛑 Paused/Stopped",
-                    _                   => "📡 Update"
-                };
-
-                let alert_title = format!("{decoration} {event_name}");
-                let alert_msg   = format!("Asset: {asset_name}\nSize: {asset_size}");
-
-                tokio::task::spawn_blocking(move || {
-                    gntp_send(&gh, gp, &gpw, event_name, &alert_title, &alert_msg);
-                });
+            let changed = { monitor2.lock().unwrap().parse_raw_data(&line) };
+            if !changed { continue; }
+            let mon = monitor2.lock().unwrap();
+            let mut p = pending2.lock().unwrap();
+            let mut n = notified2.lock().unwrap();
+            for entry in mon.downloads.values() {
+                if entry.completed {
+                    // arm timer — skip if already waiting or already fired
+                    if !p.contains_key(&entry.name) && !n.contains(&entry.name) {
+                        p.insert(entry.name.clone(), (entry.size.clone(), std::time::Instant::now()));
+                    }
+                } else {
+                    // resumed — cancel pending and allow re-notification on next real finish
+                    p.remove(&entry.name);
+                    n.remove(&entry.name);
+                }
             }
         }
     });
-
+    
     if debug {
         loop { sleep(Duration::from_secs(1)).await; }
     }
